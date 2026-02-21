@@ -1,0 +1,28 @@
+# Ruby
+.ruby-version
+.rbenv
+.bundle/
+vendor/bundle
+*.gem
+*.rbc
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config (if you ever add local overrides)
+*.local
+.env
+.env.*
