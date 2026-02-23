@@ -117,7 +117,19 @@ Required: `-l, --location_id=ID`, `-n, --node_number=NUM`
 
 Common options: `-u, --use_24hour`, `-d, --default-country CC`, `-v, --verbose`, `--dry-run`, `--no-weather`
 
-**Location and timezone:** `-l` is passed to `saytime.rb`, which calls `weather.rb` with that location when weather is enabled. Timezone comes from the location’s weather data; use `TZ=...` to override (e.g. `TZ=UTC` for UTC). Run with `--help` for the full option list.
+### When the announced time is in a timezone vs system local time
+
+| Situation | What time is announced |
+|-----------|------------------------|
+| **`TZ` is set** (e.g. `TZ=UTC`, `TZ=Europe/London`) | Time in that timezone. `TZ` overrides everything. |
+| **Weather on, location = postal code**, weather ran successfully | Time in the **location’s timezone** (from Open-Meteo or NWS; written to `/tmp/timezone` by `weather.rb`). |
+| **Weather on, location = ICAO or IATA** (e.g. KDFW, JFK) | **System local time.** METAR/aviation APIs do not provide timezone, so no timezone file is written. |
+| **`--no-weather`** | **System local time** (weather is not run, so no location timezone is available). |
+| **Weather on but no valid timezone** (e.g. weather failed, or timezone file missing/invalid) | **System local time** (fallback). |
+
+Summary: **Timezone is used** only when (1) you set `TZ`, or (2) weather is enabled, you pass a **postal code** (or location that resolves to coordinates), and `weather.rb` successfully gets weather from Open-Meteo or NWS and writes a timezone. **ICAO/IATA (airport codes) use system local time** because METAR does not supply timezone. All other cases announce **system local time**.
+
+Run with `--help` for complete option list.
 
 ## Sound Files (Hamvoip)
 
