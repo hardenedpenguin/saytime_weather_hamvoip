@@ -1,5 +1,7 @@
 # Saytime Weather for Hamvoip
 
+![GitHub total downloads](https://img.shields.io/github/downloads/hardenedpenguin/saytime_weather_hamvoip/total?style=flat-square)
+
 A Ruby implementation of time and weather announcements for Asterisk on **Hamvoip** (and other non-Debian setups). Uses `/var/lib/asterisk/sounds` and supports both **gsm** and **ulaw** sound files. No API keys required; weather from Open-Meteo and NWS.
 
 Based on [saytime_weather_rb](https://github.com/hardenedpenguin/saytime_weather_rb), adapted for Hamvoip: no Debian-specific paths (`sounds/en`), gsm as default with ulaw fallback for mixed installs.
