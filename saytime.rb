@@ -12,7 +12,7 @@ require 'optparse'
 require 'fileutils'
 require 'time'
 
-VERSION = '0.0.6'
+VERSION = '0.0.7'
 TMP_DIR = '/tmp'
 VARLIB_SOUND_BASE = '/var/lib/asterisk/sounds'
 BASE_SOUND_DIR = VARLIB_SOUND_BASE
@@ -218,7 +218,8 @@ class SaytimeScript
 
   def run
     validate_options
-    
+    log_to_file('started')
+
     # Process weather FIRST so timezone file is created before getting time
     weather_sound_files = process_weather(@options[:location_id])
     
@@ -246,8 +247,10 @@ class SaytimeScript
       info("Saved sound file to #{output_file}")
       cleanup_files(nil, @options[:weather_enabled], @options[:silent])
     end
-    
-    exit @critical_error ? 1 : 0
+
+    status = @critical_error ? 1 : 0
+    log_to_file("finished exit=#{status}")
+    exit status
   end
 
   def get_current_time(location_id)
@@ -404,7 +407,7 @@ files << add_sound_file(sound_file_path("#{sound_dir}/digits/#{display_hour}.#{S
     end
     
     unless weather_result
-      exit_code = $?.exitstatus
+      exit_code = $?.exitstatus || -1
       error("Weather script failed:")
       error("  Location: #{location_id}")
       error("  Script: #{WEATHER_SCRIPT}")
@@ -606,7 +609,7 @@ return "#{sound_file_path("#{sound_dir}/digits/0.#{SOUND_EXT}")} " if abs_num ==
     
     result = system(ASTERISK_BIN, '-rx', asterisk_cmd)
     unless result
-      exit_code = $?.exitstatus
+      exit_code = $?.exitstatus || -1
       error("Failed to play announcement:")
       error("  Method: #{@options[:play_method]}")
       error("  Node: #{node}")
@@ -620,6 +623,14 @@ return "#{sound_file_path("#{sound_dir}/digits/0.#{SOUND_EXT}")} " if abs_num ==
 
   def tmp_file(name)
     File.join(TMP_DIR, name)
+  end
+
+  def log_to_file(msg)
+    return unless @options[:log_file] && !@options[:log_file].empty?
+    line = "#{Time.now.utc.iso8601} #{msg}\n"
+    File.open(@options[:log_file], 'a') { |f| f.write(line) }
+  rescue => e
+    $stderr.puts "WARNING: could not write log file #{@options[:log_file]}: #{e.message}"
   end
 
   def is_safe_path(file)
@@ -683,14 +694,17 @@ return "#{sound_file_path("#{sound_dir}/digits/0.#{SOUND_EXT}")} " if abs_num ==
 
   def info(msg)
     puts msg
+    log_to_file(msg)
   end
 
   def warn(msg)
     $stderr.puts "WARNING: #{msg}"
+    log_to_file("WARNING: #{msg}")
   end
 
   def error(msg)
     $stderr.puts "ERROR: #{msg}"
+    log_to_file("ERROR: #{msg}")
   end
 end
 
