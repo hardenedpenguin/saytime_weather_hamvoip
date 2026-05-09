@@ -48,7 +48,10 @@ default_country = us
 ;   openmeteo: Free, no API key, worldwide coverage (default)
 ;   nws:       Free, no API key, US locations only (official government data)
 ;              Automatically falls back to openmeteo for non-US locations
-; Valid values: openmeteo, nws
+;   metno:     Free, no API key, worldwide (MET Norway / Yr); descriptive User-Agent required (built-in)
+;   wttr:      Free, no API key, worldwide (wttr.in)
+;   7timer:    Free, no API key, worldwide (7Timer! civil product, HTTP)
+; Valid values: openmeteo, nws, metno, wttr, 7timer
 ; Default: openmeteo
 weather_provider = openmeteo
 

@@ -4,7 +4,7 @@
 # weather.rb - Weather retrieval script for saytime-weather (Ruby version)
 # Copyright 2026 Jory A. Pratt, W5GLE
 #
-# - Fetches weather from Open-Meteo or NWS APIs (free, no API keys)
+# - Fetches weather from Open-Meteo, NWS, MET Norway, wttr.in, or 7Timer (free, no API keys)
 # - Supports postal codes, IATA airport codes, ICAO airport codes, and special locations
 # - Creates sound files for temperature and conditions
 
@@ -17,7 +17,7 @@ require 'optparse'
 require 'tempfile'
 require 'fileutils'
 
-VERSION = '0.0.7'
+VERSION = '0.0.10'
 TMP_DIR = '/tmp'
 TEMP_FILE = '/tmp/temperature'
 SOUND_EXT = 'gsm'
@@ -140,7 +140,7 @@ class WeatherScript
     puts "  - Temperature_mode: F/C (set to C for Celsius, F for Fahrenheit)"
     puts "  - process_condition: YES/NO (default: YES)"
     puts "  - default_country: ISO country code for postal lookups (default: us)"
-    puts "  - weather_provider: openmeteo (worldwide) or nws (US only, default: openmeteo)"
+    puts "  - weather_provider: openmeteo, nws, metno, wttr, 7timer (default: openmeteo)"
     puts "  - ssl_verify: YES/NO (default: YES) - set NO on legacy systems with outdated SSL"
     puts "  - show_precipitation: YES/NO (default: NO) - Units: inches (F) or mm (C)"
     puts "  - show_wind: YES/NO (default: NO) - Units: mph (F) or km/h (C)"
@@ -228,7 +228,7 @@ class WeatherScript
     end
     
     provider = @config['weather_provider'].to_s.downcase
-    unless %w[openmeteo nws].include?(provider)
+    unless %w[openmeteo nws metno wttr 7timer].include?(provider)
       warn("Invalid weather_provider: #{@config['weather_provider']}, using default (openmeteo)")
       @config['weather_provider'] = 'openmeteo'
     end
@@ -313,18 +313,26 @@ class WeatherScript
               weather_data = fetch_weather_openmeteo(lat, lon)
               provider = 'openmeteo'
             end
-          elsif provider == 'nws'
-            weather_data = fetch_weather_nws(lat, lon)
-            
-            unless weather_data && weather_data[:temp] && weather_data[:condition]
+          else
+            weather_data =
+              case provider
+              when 'nws'
+                fetch_weather_nws(lat, lon)
+              when 'metno'
+                fetch_weather_metno(lat, lon)
+              when 'wttr'
+                fetch_weather_wttr(lat, lon)
+              when '7timer'
+                fetch_weather_7timer(lat, lon)
+              else
+                provider = 'openmeteo'
+                fetch_weather_openmeteo(lat, lon)
+              end
+
+            if provider == 'nws' && !(weather_data && weather_data[:temp] && weather_data[:condition])
               weather_data = fetch_weather_openmeteo(lat, lon)
               provider = 'openmeteo'
-            else
-              w_type = 'nws'
             end
-          else
-            weather_data = fetch_weather_openmeteo(lat, lon)
-            provider = 'openmeteo'
           end
           
           if weather_data && weather_data[:temp] && weather_data[:condition]
@@ -1168,6 +1176,11 @@ class WeatherScript
     (ms * 2.23694).round
   end
 
+  def mph_to_ms(mph)
+    return nil unless mph && mph.is_a?(Numeric)
+    mph / 2.23694
+  end
+
   def ms_to_kmh(ms)
     return nil unless ms && ms.is_a?(Numeric)
     (ms * 3.6).round
@@ -1183,6 +1196,287 @@ class WeatherScript
     directions = %w[N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW]
     index = ((degrees + 11.25) / 22.5).round % 16
     directions[index]
+  end
+
+  MET_NO_API_UA = 'WeatherBot/1.0 (saytime-weather@github.com)'
+
+  def fetch_weather_metno(lat, lon)
+    return nil if lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0
+
+    url = "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=#{lat}&lon=#{lon}"
+    response = http_get(url, HTTP_TIMEOUT_LONG, MET_NO_API_UA)
+    return nil unless response
+
+    data = safe_decode_json(response)
+    return nil unless data && data['properties'] && data['properties']['timeseries'].is_a?(Array)
+
+    ts = data['properties']['timeseries'][0]
+    return nil unless ts && ts['data'] && ts['data']['instant'] && ts['data']['instant']['details']
+
+    details = ts['data']['instant']['details']
+    temp_c = details['air_temperature']
+    return nil unless temp_c.is_a?(Numeric)
+
+    temp_f = (temp_c * 9.0 / 5.0) + 32.0
+
+    symbol_code =
+      if ts['data']['next_1_hours'] && ts['data']['next_1_hours']['summary']
+        ts['data']['next_1_hours']['summary']['symbol_code']
+      elsif ts['data']['next_6_hours'] && ts['data']['next_6_hours']['summary']
+        ts['data']['next_6_hours']['summary']['symbol_code']
+      elsif ts['data']['next_12_hours'] && ts['data']['next_12_hours']['summary']
+        ts['data']['next_12_hours']['summary']['symbol_code']
+      end
+
+    condition = metno_symbol_to_text(symbol_code)
+    return nil unless condition
+
+    precipitation = nil
+    if @config['show_precipitation'] == 'YES' && ts['data']['next_1_hours'] && ts['data']['next_1_hours']['details']
+      pmm = ts['data']['next_1_hours']['details']['precipitation_amount']
+      precipitation = pmm if pmm.is_a?(Numeric)
+    end
+
+    wind_speed = details['wind_speed']
+    wind_speed = nil unless wind_speed.is_a?(Numeric)
+
+    wind_direction = details['wind_from_direction']
+    wind_direction = nil unless wind_direction.is_a?(Numeric)
+
+    pressure = details['air_pressure_at_sea_level']
+    pressure = nil unless pressure.is_a?(Numeric)
+
+    humidity = details['relative_humidity']
+    humidity = nil unless humidity.is_a?(Numeric)
+
+    {
+      temp: temp_f,
+      condition: condition,
+      timezone: '',
+      precipitation: precipitation,
+      wind_speed: wind_speed,
+      wind_direction: wind_direction,
+      wind_gusts: nil,
+      pressure: pressure,
+      humidity: humidity
+    }
+  end
+
+  def metno_symbol_to_text(symbol_code)
+    return nil unless symbol_code && !symbol_code.to_s.empty?
+
+    s = symbol_code.to_s.downcase
+    return 'Thunderstorm' if s.include?('thunder')
+    return 'Sleet' if s.include?('sleet')
+    return 'Foggy' if s.include?('fog')
+    return 'Heavy Snow' if s.include?('heavysnow')
+    return 'Light Snow' if s.include?('lightsnow')
+    return 'Snow' if s.include?('snow')
+    return 'Heavy Rain' if s.include?('heavyrain')
+    return 'Light Rain' if s.include?('lightrain')
+    return 'Rain' if s.include?('rain')
+    return 'Overcast' if s.include?('overcast')
+    return 'Cloudy' if s.include?('cloudy')
+    return 'Partly Cloudy' if s.include?('partlycloudy')
+    return 'Mostly Sunny' if s.include?('fair')
+    return 'Clear' if s.include?('clearsky')
+
+    nil
+  end
+
+  def fetch_weather_wttr(lat, lon)
+    return nil if lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0
+
+    q = URI.encode_www_form_component("#{lat},#{lon}")
+    url = "https://wttr.in/#{q}?format=j1"
+    response = http_get(url, HTTP_TIMEOUT_LONG)
+    return nil unless response
+
+    data = safe_decode_json(response)
+    return nil unless data && data['current_condition'].is_a?(Array) && data['current_condition'][0].is_a?(Hash)
+
+    cur = data['current_condition'][0]
+    temp_f = cur['temp_F'] || cur['FeelsLikeF']
+    temp_f = temp_f.to_f if temp_f.is_a?(String)
+    return nil unless temp_f.is_a?(Numeric)
+
+    desc = nil
+    if cur['weatherDesc'].is_a?(Array) && cur['weatherDesc'][0].is_a?(Hash)
+      desc = cur['weatherDesc'][0]['value']
+    end
+    condition = wttr_text_to_condition(desc)
+    return nil unless condition
+
+    precipitation = nil
+    if @config['show_precipitation'] == 'YES'
+      pmm = cur['precipMM']
+      pmm = pmm.to_f if pmm.is_a?(String)
+      precipitation = pmm if pmm.is_a?(Numeric)
+    end
+
+    humidity = nil
+    if @config['show_humidity'] == 'YES'
+      rh = cur['humidity']
+      rh = rh.to_f if rh.is_a?(String)
+      humidity = rh if rh.is_a?(Numeric)
+    end
+
+    pressure = nil
+    if @config['show_pressure'] == 'YES'
+      press = cur['pressure']
+      press = press.to_f if press.is_a?(String)
+      pressure = press if press.is_a?(Numeric)
+    end
+
+    wind_speed = nil
+    wind_direction = nil
+    if @config['show_wind'] == 'YES'
+      mph = cur['windspeedMiles']
+      mph = mph.to_f if mph.is_a?(String)
+      wind_speed = mph_to_ms(mph) if mph.is_a?(Numeric)
+
+      wd = cur['winddirDegree']
+      wd = wd.to_f if wd.is_a?(String)
+      wind_direction = wd if wd.is_a?(Numeric)
+    end
+
+    {
+      temp: temp_f,
+      condition: condition,
+      timezone: '',
+      precipitation: precipitation,
+      wind_speed: wind_speed,
+      wind_direction: wind_direction,
+      wind_gusts: nil,
+      pressure: pressure,
+      humidity: humidity
+    }
+  end
+
+  def wttr_text_to_condition(text)
+    return nil unless text && !text.to_s.empty?
+    parse_nws_condition(text)
+  end
+
+  def fetch_weather_7timer(lat, lon)
+    return nil if lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0
+
+    lat_r = lat.round(3)
+    lon_r = lon.round(3)
+    url = "http://www.7timer.info/bin/api.pl?lon=#{lon_r}&lat=#{lat_r}&product=civil&output=json"
+    response = http_get(url, HTTP_TIMEOUT_LONG)
+    return nil unless response
+
+    data = safe_decode_json(response)
+    return nil unless data && data['dataseries'].is_a?(Array) && data['dataseries'][0].is_a?(Hash)
+
+    cur = data['dataseries'][0]
+
+    temp_c = cur['temp2m']
+    return nil unless temp_c.is_a?(Numeric)
+    temp_f = (temp_c * 9.0 / 5.0) + 32.0
+
+    condition = seventimer_weather_to_condition(cur['weather'])
+    return nil unless condition
+
+    precipitation = nil
+    if @config['show_precipitation'] == 'YES'
+      precipitation = seventimer_precip_amount_to_mm(cur['prec_amount'])
+    end
+
+    humidity = nil
+    if @config['show_humidity'] == 'YES'
+      rh = cur['rh2m']
+      if rh.is_a?(String) && rh.end_with?('%')
+        humidity = rh.delete('%').to_f
+      elsif rh.is_a?(Numeric)
+        humidity = rh
+      end
+    end
+
+    wind_speed = nil
+    wind_direction = nil
+    if @config['show_wind'] == 'YES' && cur['wind10m'].is_a?(Hash)
+      wind_speed = seventimer_wind_speed_to_ms(cur['wind10m']['speed'])
+      wind_direction = seventimer_wind_dir_to_degrees(cur['wind10m']['direction'])
+    end
+
+    {
+      temp: temp_f,
+      condition: condition,
+      timezone: '',
+      precipitation: precipitation,
+      wind_speed: wind_speed,
+      wind_direction: wind_direction,
+      wind_gusts: nil,
+      pressure: nil,
+      humidity: humidity
+    }
+  end
+
+  def seventimer_weather_to_condition(code)
+    return nil unless code
+
+    c = code.to_s.downcase
+    return 'Thunderstorm' if c.start_with?('ts')
+    return 'Sleet' if c.include?('rainsnow')
+    return 'Light Rain' if c.start_with?('lightrain') || c.start_with?('oshower') || c.start_with?('ishower')
+    return 'Rain' if c.start_with?('rain')
+    return 'Light Snow' if c.start_with?('lightsnow')
+    return 'Snow' if c.start_with?('snow')
+    return 'Foggy' if c.start_with?('humid')
+    return 'Overcast' if c.start_with?('cloudy')
+    return 'Cloudy' if c.start_with?('mcloudy')
+    return 'Partly Cloudy' if c.start_with?('pcloudy')
+    return 'Clear' if c.start_with?('clear')
+
+    nil
+  end
+
+  def seventimer_wind_dir_to_degrees(dir)
+    return nil unless dir
+
+    map = {
+      'N' => 0.0, 'NE' => 45.0, 'E' => 90.0, 'SE' => 135.0,
+      'S' => 180.0, 'SW' => 225.0, 'W' => 270.0, 'NW' => 315.0
+    }
+    map[dir.to_s.upcase]
+  end
+
+  def seventimer_wind_speed_to_ms(level)
+    return nil unless level && level.is_a?(Numeric)
+
+    case level.to_i
+    when 1 then 0.0
+    when 2 then (0.3 + 3.4) / 2.0
+    when 3 then (3.4 + 8.0) / 2.0
+    when 4 then (8.0 + 10.8) / 2.0
+    when 5 then (10.8 + 17.2) / 2.0
+    when 6 then (17.2 + 24.5) / 2.0
+    when 7 then (24.5 + 32.6) / 2.0
+    when 8 then 33.0
+    else
+      nil
+    end
+  end
+
+  def seventimer_precip_amount_to_mm(level)
+    return nil unless level && level.is_a?(Numeric)
+
+    case level.to_i
+    when 0 then 0.0
+    when 1 then 0.125
+    when 2 then 0.625
+    when 3 then 2.5
+    when 4 then 7.0
+    when 5 then 13.0
+    when 6 then 23.0
+    when 7 then 40.0
+    when 8 then 62.5
+    when 9 then 80.0
+    else
+      nil
+    end
   end
 
   def fetch_weather_nws(lat, lon)

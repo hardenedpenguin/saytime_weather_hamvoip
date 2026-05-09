@@ -12,7 +12,7 @@ require 'optparse'
 require 'fileutils'
 require 'time'
 
-VERSION = '0.0.7'
+VERSION = '0.0.10'
 TMP_DIR = '/tmp'
 VARLIB_SOUND_BASE = '/var/lib/asterisk/sounds'
 BASE_SOUND_DIR = VARLIB_SOUND_BASE
